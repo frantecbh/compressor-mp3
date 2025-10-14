@@ -1,75 +1,52 @@
 # ============================================
-# STAGE 1: Dependências
+# Dockerfile Simplificado e Robusto
 # ============================================
-FROM node:18-alpine AS deps
-
-# Instalar dependências do sistema necessárias
-RUN apk add --no-cache libc6-compat
+FROM node:18-alpine
 
 WORKDIR /app
 
-# Copiar arquivos de dependências
-COPY package.json package-lock.json* ./
-
-# Instalar TODAS as dependências (incluindo dev para o build)
-RUN npm ci
-
-
-# ============================================
-# STAGE 2: Builder
-# ============================================
-FROM node:18-alpine AS builder
-
-WORKDIR /app
-
-# Copiar dependências da stage anterior
-COPY --from=deps /app/node_modules ./node_modules
-
-# Copiar todo o código fonte
-COPY . .
-
-# Desabilitar telemetria do Next.js durante build
-ENV NEXT_TELEMETRY_DISABLED 1
-
-# Build da aplicação Next.js
-RUN npm run build
-
-
-# ============================================
-# STAGE 3: Runner (Produção)
-# ============================================
-FROM node:18-alpine AS runner
-
-WORKDIR /app
-
-# Definir ambiente de produção
-ENV NODE_ENV production
-ENV NEXT_TELEMETRY_DISABLED 1
-
-# ============================================
-# INSTALAR FFMPEG E DEPENDÊNCIAS
-# ============================================
+# Instalar FFmpeg e dependências do sistema
 RUN apk add --no-cache \
   ffmpeg \
-  && ffmpeg -version \
-  && ffprobe -version
+  python3 \
+  make \
+  g++ \
+  && ffmpeg -version
 
-# Criar usuário não-root para segurança
-RUN addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 nextjs
+# Copiar arquivos de package
+COPY package.json package-lock.json* ./
 
-# Criar diretório temporário com permissões corretas
-RUN mkdir -p /tmp/compressor && chown -R nextjs:nodejs /tmp/compressor
+# Limpar cache do npm e instalar dependências
+RUN npm cache clean --force && \
+  npm install && \
+  echo "✅ Dependências instaladas com sucesso"
 
-# Copiar arquivos públicos se existirem
-COPY --from=builder /app/public ./public 2>/dev/null || true
+# Copiar todo o código
+COPY . .
 
-# Definir permissões para o diretório .next
-RUN mkdir -p .next && chown -R nextjs:nodejs .next
+# Verificar arquivos copiados
+RUN echo "📁 Verificando estrutura:" && \
+  ls -la && \
+  echo "📁 Conteúdo de src/app:" && \
+  ls -la src/app/ || ls -la app/ || echo "Nenhum diretório app encontrado"
 
-# Copiar arquivos de build do Next.js
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Desabilitar telemetria
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Build com logs detalhados
+RUN echo "🔨 Iniciando build do Next.js..." && \
+  npm run build && \
+  echo "✅ Build concluído com sucesso!" && \
+  ls -la .next/
+
+# Limpar cache de build para reduzir tamanho
+RUN npm prune --production && \
+  rm -rf .next/cache
+
+# Criar usuário não-root
+RUN addgroup -g 1001 -S nodejs && \
+  adduser -S nextjs -u 1001 && \
+  chown -R nextjs:nodejs /app
 
 # Mudar para usuário não-root
 USER nextjs
@@ -77,9 +54,8 @@ USER nextjs
 # Expor porta
 EXPOSE 3000
 
-# Definir porta
-ENV PORT 3000
-ENV HOSTNAME "0.0.0.0"
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
-# Comando para iniciar a aplicação
-CMD ["node", "server.js"]
+# Comando de inicialização
+CMD ["npm", "start"]
