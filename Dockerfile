@@ -11,8 +11,8 @@ WORKDIR /app
 # Copiar arquivos de dependências
 COPY package.json package-lock.json* ./
 
-# Instalar dependências do Node.js
-RUN npm ci --only=production
+# Instalar TODAS as dependências (incluindo dev para o build)
+RUN npm ci
 
 
 # ============================================
@@ -51,7 +51,6 @@ ENV NEXT_TELEMETRY_DISABLED 1
 # ============================================
 RUN apk add --no-cache \
   ffmpeg \
-  ffmpeg-libs \
   && ffmpeg -version \
   && ffprobe -version
 
@@ -62,8 +61,11 @@ RUN addgroup --system --gid 1001 nodejs \
 # Criar diretório temporário com permissões corretas
 RUN mkdir -p /tmp/compressor && chown -R nextjs:nodejs /tmp/compressor
 
-# Copiar arquivos públicos
-COPY --from=builder /app/public ./public
+# Copiar arquivos públicos se existirem
+COPY --from=builder /app/public ./public 2>/dev/null || true
+
+# Definir permissões para o diretório .next
+RUN mkdir -p .next && chown -R nextjs:nodejs .next
 
 # Copiar arquivos de build do Next.js
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
