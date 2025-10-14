@@ -42,3 +42,9 @@ README.md
 LICENSE
 .prettierrc
 .eslintrc.json
+
+node_modules
+.next
+.git
+*.log
+.env*.local

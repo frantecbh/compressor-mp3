@@ -1,61 +1,33 @@
-# ============================================
-# Dockerfile Simplificado e Robusto
-# ============================================
+# Use Node.js 18 Alpine
 FROM node:18-alpine
 
+# Definir diretório de trabalho
 WORKDIR /app
 
-# Instalar FFmpeg e dependências do sistema
-RUN apk add --no-cache \
-  ffmpeg \
-  python3 \
-  make \
-  g++ \
-  && ffmpeg -version
+# Instalar FFmpeg
+RUN apk add --no-cache ffmpeg
 
-# Copiar arquivos de package
-COPY package.json package-lock.json* ./
+# Copiar package.json e package-lock.json
+COPY package*.json ./
 
-# Limpar cache do npm e instalar dependências
-RUN npm cache clean --force && \
-  npm install && \
-  echo "✅ Dependências instaladas com sucesso"
+# Instalar dependências
+RUN npm ci
 
-# Copiar todo o código
+# Copiar todo o código do projeto
 COPY . .
 
-# Verificar arquivos copiados
-RUN echo "📁 Verificando estrutura:" && \
-  ls -la && \
-  echo "📁 Conteúdo de src/app:" && \
-  ls -la src/app/ || ls -la app/ || echo "Nenhum diretório app encontrado"
-
-# Desabilitar telemetria
+# Desabilitar telemetria do Next.js
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Build com logs detalhados
-RUN echo "🔨 Iniciando build do Next.js..." && \
-  npm run build && \
-  echo "✅ Build concluído com sucesso!" && \
-  ls -la .next/
+# Build da aplicação
+RUN npm run build
 
-# Limpar cache de build para reduzir tamanho
-RUN npm prune --production && \
-  rm -rf .next/cache
-
-# Criar usuário não-root
-RUN addgroup -g 1001 -S nodejs && \
-  adduser -S nextjs -u 1001 && \
-  chown -R nextjs:nodejs /app
-
-# Mudar para usuário não-root
-USER nextjs
-
-# Expor porta
+# Expor porta 3000
 EXPOSE 3000
 
+# Definir variáveis de ambiente
 ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
+ENV NODE_ENV=production
 
-# Comando de inicialização
+# Iniciar aplicação
 CMD ["npm", "start"]
