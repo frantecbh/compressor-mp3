@@ -1,7 +1,8 @@
 // app/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import type { FFmpeg as FFmpegType } from '@ffmpeg/ffmpeg';
 import { Upload, FileAudio, Download, AlertCircle, CheckCircle2, Video } from 'lucide-react';
 
 interface CompressionResult {
@@ -32,43 +33,107 @@ export default function MP3Compressor() {
     }
   };
 
+  const ffmpegRef = useRef<FFmpegType | null>(null);
+  const [progress, setProgress] = useState<number>(0);
+  const [status, setStatus] = useState<string>('');
+
+  const getMediaDuration = (f: File): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const el = document.createElement(f.type.includes('video') ? 'video' : 'audio');
+      el.preload = 'metadata';
+      el.onloadedmetadata = () => {
+        URL.revokeObjectURL(el.src);
+        resolve(el.duration);
+      };
+      el.onerror = () => reject(new Error('Não foi possível ler a duração do arquivo'));
+      el.src = URL.createObjectURL(f);
+    });
+
+  const loadFFmpeg = async (): Promise<FFmpegType> => {
+    if (ffmpegRef.current) return ffmpegRef.current;
+    setStatus('Carregando FFmpeg (só na primeira vez)...');
+    const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+    const { toBlobURL } = await import('@ffmpeg/util');
+    const ffmpeg = new FFmpeg();
+    ffmpeg.on('progress', ({ progress: p }) => {
+      setProgress(Math.min(100, Math.max(0, Math.round(p * 100))));
+    });
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
+    await ffmpeg.load({
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+    ffmpegRef.current = ffmpeg;
+    return ffmpeg;
+  };
+
   const compressAudio = async () => {
     if (!file) return;
 
     setUploading(true);
     setError(null);
     setResult(null);
+    setProgress(0);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      const isVideo = file.type.includes('video');
+      const ext = isVideo ? 'mp4' : 'mp3';
+      const inputName = `input.${ext}`;
+      const outputName = `output.${ext}`;
 
-      const response = await fetch('/api/compress-mp3', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('Erro ao comprimir o arquivo');
+      const duration = await getMediaDuration(file);
+      if (!duration || !Number.isFinite(duration) || duration <= 0) {
+        throw new Error('Não foi possível determinar a duração do arquivo');
       }
 
-      const blob = await response.blob();
+      // Mesmo cálculo da versão com servidor: alvo abaixo de 4 MB
+      const targetSizeKB = 4000;
+      const targetBitrate = Math.floor((targetSizeKB * 8) / duration);
+
+      const ffmpeg = await loadFFmpeg();
+      const { fetchFile } = await import('@ffmpeg/util');
+
+      setStatus('Comprimindo no seu navegador...');
+      await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+      let args: string[];
+      if (isVideo) {
+        const videoBitrate = Math.max(Math.min(Math.floor(targetBitrate * 0.85), 1000), 50);
+        const audioBitrate = Math.max(Math.min(Math.floor(targetBitrate * 0.15), 128), 32);
+        args = [
+          '-i', inputName,
+          '-c:v', 'libx264', '-preset', 'ultrafast',
+          '-b:v', `${videoBitrate}k`, '-maxrate', `${videoBitrate}k`, '-bufsize', `${videoBitrate * 2}k`,
+          '-c:a', 'aac', '-b:a', `${audioBitrate}k`,
+          '-y', outputName,
+        ];
+      } else {
+        const safeBitrate = Math.max(Math.min(targetBitrate, 128), 32);
+        args = ['-i', inputName, '-c:a', 'libmp3lame', '-b:a', `${safeBitrate}k`, '-ar', '44100', '-y', outputName];
+      }
+
+      const code = await ffmpeg.exec(args);
+      if (code !== 0) throw new Error('O FFmpeg não conseguiu comprimir este arquivo');
+
+      const data = await ffmpeg.readFile(outputName);
+      await ffmpeg.deleteFile(inputName).catch(() => {});
+      await ffmpeg.deleteFile(outputName).catch(() => {});
+
+      const blob = new Blob([new Uint8Array(data as Uint8Array)], { type: isVideo ? 'video/mp4' : 'audio/mpeg' });
       const url = URL.createObjectURL(blob);
-      const originalSize = (file.size / (1024 * 1024)).toFixed(2);
-      const compressedSize = (blob.size / (1024 * 1024)).toFixed(2);
-      const fileType = file.type.includes('video') ? 'video' : 'audio';
 
       setResult({
         url,
-        originalSize,
-        compressedSize,
+        originalSize: (file.size / (1024 * 1024)).toFixed(2),
+        compressedSize: (blob.size / (1024 * 1024)).toFixed(2),
         reduction: ((1 - blob.size / file.size) * 100).toFixed(1),
-        fileType,
+        fileType: isVideo ? 'video' : 'audio',
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro ao processar o arquivo');
     } finally {
       setUploading(false);
+      setStatus('');
     }
   };
 
@@ -199,8 +264,11 @@ export default function MP3Compressor() {
               <div className="text-center py-8">
                 <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-200 border-t-purple-600 mb-4"></div>
                 <p className="text-gray-600 font-medium">
-                  Comprimindo seu arquivo...
+                  {status || 'Comprimindo seu arquivo...'}
                 </p>
+                {progress > 0 && (
+                  <p className="text-sm text-gray-500 mt-1">{progress}%</p>
+                )}
               </div>
             )}
           </div>
